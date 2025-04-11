@@ -22,6 +22,7 @@ use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
+
 pub use context::TaskContext;
 
 /// The task manager, where all the tasks are managed.
@@ -153,6 +154,32 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// record syscall times
+    fn record_task_trace(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_trace.record_syscall_count(syscall_id);
+    }
+    /// get task trace
+    fn get_task_trace(&self, syscall_id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_trace.get_syscall_count(syscall_id)
+    }
+
+    /// mmap for syscall
+    fn mmap(&self, start: usize, len: usize, prot: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].mmap(start, len, prot)
+    }
+    /// munmap for syscall
+    fn munmap(&self, addr: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].munmap(addr, len)
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +228,23 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// 计数syscall
+pub fn record_task_trace(syscall_id: usize) {
+    TASK_MANAGER.record_task_trace(syscall_id);
+}
+
+/// 得到syscall调用次数
+pub fn get_task_trace(syscall_id: usize) -> usize {
+    TASK_MANAGER.get_task_trace(syscall_id)
+}
+
+/// mmap for syscall
+pub fn mmap(start: usize, len: usize, prot: usize) -> isize {
+    TASK_MANAGER.mmap(start, len, prot)
+}
+/// munmap for syscall
+pub fn munmap(addr: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(addr, len)
 }

@@ -174,6 +174,10 @@ impl PhysAddr {
     pub fn get_mut<T>(&self) -> &'static mut T {
         unsafe { (self.0 as *mut T).as_mut().unwrap() }
     }
+    /// get ref
+    pub fn get_ref<T>(&self) -> &'static T {
+        unsafe { (self.0 as *const T).as_ref().unwrap() }
+    }
 }
 impl PhysPageNum {
     /// Get the reference of page table(array of ptes)

@@ -1,6 +1,5 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
-
-use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+use super::{frame_alloc, FrameTracker, PhysPageNum, PhysAddr, StepByOne, VirtAddr, VirtPageNum};
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -69,6 +68,10 @@ impl PageTableEntry {
     /// The page pointered by page table entry is executable?
     pub fn executable(&self) -> bool {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
+    }
+    /// is user accessible?
+    pub fn is_user(&self) -> bool {
+        (self.flags() & PTEFlags::U) != PTEFlags::empty()
     }
 }
 
@@ -151,10 +154,37 @@ impl PageTable {
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.find_pte(vpn).map(|pte| *pte)
     }
+    /// get the physical address from the virtual address
+    pub fn translate_va(&self, va: VirtAddr) -> Option<PhysAddr> {
+        let vpn = va.clone().floor();
+        self.find_pte(vpn).map(|pte| {
+            //println!("translate_va:va = {:?}", va);
+            let aligned_pa: PhysAddr = pte.ppn().into();
+            //println!("translate_va:pa_align = {:?}", aligned_pa);
+            let offset = va.page_offset();
+            let aligned_pa_usize: usize = aligned_pa.into();
+            (aligned_pa_usize + offset).into()
+        })
+    }
     /// get the token from the page table
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0
     }
+    /// is mapped
+    pub fn is_mapped(&self, vpn: VirtPageNum) -> bool {
+        if let Some(pte)=self.find_pte(vpn) {
+            pte.is_valid()
+        } else {
+            false
+        }
+    }
+}
+
+/// translate pte
+pub fn translated_pte(token: usize, va: VirtAddr) -> Option<PageTableEntry> {
+    let vpn = va.clone().floor();
+    let page_table = PageTable::from_token(token);
+    page_table.translate(vpn)
 }
 
 /// Translate&Copy a ptr[u8] array with LENGTH len to a mutable u8 Vec through page table
@@ -178,4 +208,28 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+/// Translate&Copy a ptr[T] array to a mutable T Vec through page table
+pub fn translated_to_mut<T>(token: usize, ptr: *mut T) -> Option<&'static mut T> {
+    let page_table = PageTable::from_token(token);
+    let va = ptr as usize;
+    // Some(page_table
+    //     .translate_va(VirtAddr::from(va))
+    //     .unwrap()
+    //     .get_mut())
+    if let Some(pa) = page_table.translate_va(VirtAddr::from(va)) {
+        Some(pa.get_mut::<T>())
+    } else {
+        None
+    }
+}
+
+/// translate a pointer `ptr` in other address space to a immutable u8 slice in kernel address space. NOTICE: the content pointed to by the pointer `ptr` cannot cross physical pages, otherwise translated_byte_buffer should be used.
+pub fn translated_ref<T>(token: usize, ptr: *const T) -> &'static T {
+    let page_table = PageTable::from_token(token);
+    page_table
+        .translate_va(VirtAddr::from(ptr as usize))
+        .unwrap()
+        .get_ref()
 }

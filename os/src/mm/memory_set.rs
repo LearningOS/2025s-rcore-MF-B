@@ -40,6 +40,36 @@ pub struct MemorySet {
 }
 
 impl MemorySet {
+    /// is all mapped
+    pub fn is_all_unmapped(&self, s_vpn: VirtPageNum, e_vpn: VirtPageNum) -> bool {
+        // if s_vpn == e_vpn {
+        //     return !self.page_table.is_mapped(s_vpn);
+        // }
+        let mut s_vpn = s_vpn;
+        while s_vpn <= e_vpn {
+            if !self.page_table.is_mapped(s_vpn) {
+                s_vpn.step();
+            }else{
+                return false;
+            }
+        }
+        true
+    }
+    /// is all unmapped
+    pub fn is_all_mapped(&self, s_vpn: VirtPageNum, e_vpn: VirtPageNum) -> bool {
+        if s_vpn == e_vpn {
+            return self.page_table.is_mapped(s_vpn);
+        }
+        let mut s_vpn = s_vpn;
+        while s_vpn <= e_vpn {
+            if self.page_table.is_mapped(s_vpn) {
+                s_vpn.step();
+            }else{
+                return false;
+            }
+        }
+        true
+    }
     /// Create a new empty `MemorySet`.
     pub fn new_bare() -> Self {
         Self {
@@ -69,6 +99,16 @@ impl MemorySet {
             map_area.copy_data(&mut self.page_table, data);
         }
         self.areas.push(map_area);
+    }
+    /// munmap a range of virtual pages
+    pub fn munmap(&mut self, s_vpn: VirtPageNum, e_vpn: VirtPageNum) {
+        for (i, area) in self.areas.iter_mut().enumerate() {
+            if area.vpn_range.get_start() <= s_vpn && area.vpn_range.get_end() >= e_vpn {
+                area.unmap(&mut self.page_table);
+                self.areas.swap_remove(i);
+                break;
+            }
+        }
     }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
@@ -409,4 +449,9 @@ pub fn remap_test() {
         .unwrap()
         .executable(),);
     println!("remap_test passed!");
+}
+
+/// get kernel_token
+pub fn kernel_token() -> usize {
+    KERNEL_SPACE.exclusive_access().token()
 }

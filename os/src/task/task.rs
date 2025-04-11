@@ -1,4 +1,6 @@
 //! Types related to task management
+use alloc::collections::btree_map::BTreeMap;
+
 use super::TaskContext;
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::mm::{
@@ -28,6 +30,9 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// The task trace
+    pub task_trace: TaskTrace,
 }
 
 impl TaskControlBlock {
@@ -63,6 +68,7 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            task_trace: TaskTrace::new(),
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -96,6 +102,46 @@ impl TaskControlBlock {
             None
         }
     }
+
+    /// mmap
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> isize{
+        if len == 0 || (prot & !0x7 != 0) || (prot & 0x7 == 0) {
+            return -1;
+        }
+        let start_va = VirtAddr::from(start);
+        if !start_va.aligned() {
+            return -1;
+        }
+        let end_va: VirtAddr = (start + len).into();
+
+        if !self.memory_set.is_all_unmapped(start_va.floor(), end_va.floor()) {
+            return -1;
+        }
+
+        let mut permission = MapPermission::U;
+        if prot & 0x1 != 0 { permission |= MapPermission::R; }
+        if prot & 0x2 != 0 { permission |= MapPermission::W }
+        if prot & 0x4 != 0 { permission |= MapPermission::X }
+
+        self.memory_set.insert_framed_area(start_va, end_va, permission);
+        0
+    }
+    /// munmap
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        let start_va = VirtAddr::from(start);
+        if !start_va.aligned() {
+            return -1;
+        }
+        let s_vpn = VirtAddr::from(start).floor();
+        let e_vpn = VirtAddr::from(start + len - 1).floor();
+
+        if !self.memory_set.is_all_mapped(s_vpn, e_vpn) {
+            return -1;
+        }
+
+        self.memory_set.munmap(s_vpn, e_vpn);
+        0
+    }
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -109,4 +155,27 @@ pub enum TaskStatus {
     Running,
     /// exited
     Exited,
+}
+
+#[derive(Clone)]
+pub struct TaskTrace {
+    pub syscall_map: BTreeMap<usize, usize>,
+}
+
+impl TaskTrace {
+    pub fn new() -> Self {
+        TaskTrace {
+            syscall_map: BTreeMap::new(),
+        }
+    }
+
+    pub fn record_syscall_count(&mut self, syscall_id: usize) {
+        // 如果已经存在这个系统调用的记录，就增加它的计数
+        // 如果不存在，就插入一个新的记录，初始值为1
+        *self.syscall_map.entry(syscall_id).or_insert(0) += 1;
+    }
+
+    pub fn get_syscall_count(&self, syscall_id: usize) -> usize {
+        *self.syscall_map.get(&syscall_id).unwrap_or(&0)
+    }
 }
