@@ -29,6 +29,14 @@ impl Inode {
             block_device,
         }
     }
+    /// get nlink
+    pub fn get_nlink(&self) -> u64 {
+        self.read_disk_inode(|disk_inode| disk_inode.nlink())
+    }
+    /// Get the block id of the inode
+    pub fn block_id(&self) -> usize {
+        self.block_id
+    }
     /// Call a function over a disk inode to read it
     fn read_disk_inode<V>(&self, f: impl FnOnce(&DiskInode) -> V) -> V {
         get_block_cache(self.block_id, Arc::clone(&self.block_device))
@@ -40,6 +48,31 @@ impl Inode {
         get_block_cache(self.block_id, Arc::clone(&self.block_device))
             .lock()
             .modify(self.block_offset, f)
+    }
+    /// is dir
+    pub fn is_dir(&self) -> bool {
+        self.read_disk_inode(|disk_inode| disk_inode.is_dir())
+    }
+    /// remove the direntry
+    fn remove_direntry(&self, name: &str, disk_inode: &mut DiskInode) -> Option<isize> {
+        let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+        let mut dirent = DirEntry::empty();
+        for i in 0..file_count {
+            assert_eq!(
+                disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device,),
+                DIRENT_SZ,
+            );
+            if dirent.name() == name {
+                let dirent = DirEntry::empty();
+                disk_inode.write_at(
+                    i * DIRENT_SZ,
+                    dirent.as_bytes(),
+                    &self.block_device,
+                );
+                return Some(0);
+            }
+        }
+        None
     }
     /// Find inode under a disk inode by name
     fn find_inode_id(&self, name: &str, disk_inode: &DiskInode) -> Option<u32> {
@@ -89,6 +122,95 @@ impl Inode {
             v.push(fs.alloc_data());
         }
         disk_inode.increase_size(new_size, v, &self.block_device);
+    }
+    /// linkat a file to current inode
+    pub fn link_at(&self, old_path: &str, new_path: &str) -> isize {
+        let mut fs = self.fs.lock();
+        let op = |root_inode: &DiskInode| {
+            // assert it is a directory
+            assert!(root_inode.is_dir());
+            // has the file been created?
+            self.find_inode_id(old_path, root_inode)
+        };
+        // 找到旧文件,就进行硬链接,否则返回-1
+        if let Some(old_inode_id) = self.read_disk_inode(op) {
+            // 找到对应的inode
+            let (block_id, block_offset) = fs.get_disk_inode_pos(old_inode_id);
+            let inode = Inode::new(
+                block_id,
+                block_offset,
+                self.fs.clone(),
+                self.block_device.clone(),
+            );
+            
+            // 减少引用计数
+            inode.modify_disk_inode(|disk_inode| {
+                disk_inode.nlink += 1
+            });
+            // 对root_inode插入目录项
+            self.modify_disk_inode(|root_inode| {
+                // append file in the dirent
+                let file_count = (root_inode.size as usize) / DIRENT_SZ;
+                let new_size = (file_count + 1) * DIRENT_SZ;
+                // increase size
+                self.increase_size(new_size as u32, root_inode, &mut fs);
+                // write dirent
+                let dirent = DirEntry::new(new_path, old_inode_id);
+                root_inode.write_at(
+                    file_count * DIRENT_SZ,
+                    dirent.as_bytes(),
+                    &self.block_device,
+                );
+            });
+            0
+        }
+        else{
+            return -1;
+        }
+    }
+    /// unlinkat a file to current inode
+    pub fn unlink_at(&self, path: &str) -> isize {
+        let fs = self.fs.lock();
+        // 先找到要删除文件的inode_id
+        let find_inode_id = |root_inode: &DiskInode| {
+            // assert it is a directory
+            assert!(root_inode.is_dir());
+            // find the file's inode_id
+            self.find_inode_id(path, root_inode)
+        };
+        
+        // 获取inode_id
+        if let Some(inode_id) = self.read_disk_inode(find_inode_id) {
+            // 找到对应的inode
+            let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
+            let inode = Inode::new(
+                block_id,
+                block_offset,
+                self.fs.clone(),
+                self.block_device.clone(),
+            );
+            
+            // 减少引用计数
+            inode.modify_disk_inode(|disk_inode| {
+                if disk_inode.nlink > 0 {
+                    disk_inode.nlink -= 1;
+                }
+                // 如果引用计数为0，可以考虑释放资源
+                // 但这通常在文件系统清理时进行，此处暂不实现
+            });
+            
+            // 现在从目录中删除目录项
+            let remove = |root_inode: &mut DiskInode| {
+                self.remove_direntry(path, root_inode)
+            };
+            
+            if let Some(result) = self.modify_disk_inode(remove) {
+                return result;
+            }
+        }
+        
+        // 文件不存在
+        -1
     }
     /// Create inode under current inode by name
     pub fn create(&self, name: &str) -> Option<Arc<Inode>> {

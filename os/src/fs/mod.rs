@@ -3,6 +3,8 @@
 mod inode;
 mod stdio;
 
+use core::any::Any;
+
 use crate::mm::UserBuffer;
 
 /// trait File for all file types
@@ -15,11 +17,13 @@ pub trait File: Send + Sync {
     fn read(&self, buf: UserBuffer) -> usize;
     /// write to the file from buf, return the number of bytes written
     fn write(&self, buf: UserBuffer) -> usize;
+    /// 添加as_any方法，用于将File trait对象转换为具体类型
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// The stat of a inode
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct Stat {
     /// ID of device containing file
     pub dev: u64,
@@ -31,6 +35,18 @@ pub struct Stat {
     pub nlink: u32,
     /// unused pad
     pad: [u64; 7],
+}
+impl Stat {
+    /// create a new stat
+    pub fn new(inode: u64, mode: StatMode, nlink: u32) -> Self {
+        Self {
+            dev: 0,
+            ino: inode,
+            mode,
+            nlink,
+            pad: [0; 7],
+        }
+    }
 }
 
 bitflags! {
@@ -46,5 +62,5 @@ bitflags! {
     }
 }
 
-pub use inode::{list_apps, open_file, OSInode, OpenFlags};
+pub use inode::{list_apps, open_file,linkat,unlinkat,OSInode, OpenFlags};
 pub use stdio::{Stdin, Stdout};

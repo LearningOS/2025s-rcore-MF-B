@@ -4,7 +4,9 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use core::any::Any;
+
+use super::{File, Stat, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -34,7 +36,7 @@ impl OSInode {
         Self {
             readable,
             writable,
-            inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode }) },
+            inner: unsafe { UPSafeCell::new(OSInodeInner {offset: 0, inode }) },
         }
     }
     /// read all data from the inode
@@ -52,6 +54,18 @@ impl OSInode {
             v.extend_from_slice(&buffer[..len]);
         }
         v
+    }
+    /// get fstat
+    pub fn fstat(&self) -> Stat {
+        let inner = self.inner.exclusive_access();
+        let inode = &inner.inode;
+        let inode_id = inode.block_id();
+        let mode = match inode.is_dir() {
+            true => StatMode::DIR,
+            false => StatMode::FILE
+        };
+        let nlink = inode.get_nlink();
+        Stat::new(inode_id as u64,mode , nlink as u32)
     }
 }
 
@@ -124,6 +138,16 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
         })
     }
 }
+/// link at a new file to old file
+pub fn linkat(old_path: &str, new_path: &str) -> isize {
+    // 执行链接操作
+    ROOT_INODE.link_at(old_path, new_path)
+}
+/// link at a new file to old file
+pub fn unlinkat(path: &str) -> isize {
+    // 先打开文件获取对应的OSInode
+    ROOT_INODE.unlink_at(path)
+}
 
 impl File for OSInode {
     fn readable(&self) -> bool {
@@ -155,5 +179,8 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

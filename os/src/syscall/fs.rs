@@ -1,6 +1,7 @@
 //! File and filesystem-related syscalls
-use crate::fs::{open_file, OpenFlags, Stat};
-use crate::mm::{translated_byte_buffer, translated_str, UserBuffer};
+
+use crate::fs::{linkat, open_file, unlinkat, OSInode, OpenFlags, Stat};
+use crate::mm::{translated_byte_buffer, translated_refmut, translated_str, UserBuffer};
 use crate::task::{current_task, current_user_token};
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
@@ -81,7 +82,29 @@ pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
         "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    
+    if _fd >= inner.fd_table.len() {
+        return -1;
+    }
+    
+    if let Some(file) = &inner.fd_table[_fd] {
+        // 尝试将file转换为OSInode以获取stat信息
+        if let Some(inode) = file.as_any().downcast_ref::<OSInode>() {
+            let fstat = inode.fstat();
+            
+            // 将stat信息拷贝到用户空间
+            // 首先获取用户空间的Stat结构体的指针
+
+            let stat = translated_refmut(token, _st);
+            *stat = fstat;
+            return 0; // 成功
+        }
+    }
+    
+    -1 // 文件不存在或者无法获取stat信息
 }
 
 /// YOUR JOB: Implement linkat.
@@ -90,7 +113,10 @@ pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
         "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let old_name = translated_str(token, _old_name);
+    let new_name = translated_str(token, _new_name);
+    linkat(old_name.as_str(), new_name.as_str())
 }
 
 /// YOUR JOB: Implement unlinkat.
@@ -99,5 +125,7 @@ pub fn sys_unlinkat(_name: *const u8) -> isize {
         "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let old_name = translated_str(token, _name);
+    unlinkat(old_name.as_str())
 }
